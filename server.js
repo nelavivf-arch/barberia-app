@@ -15,7 +15,14 @@ fs.mkdirSync(databaseDirectory, { recursive: true });
 
 // Conexión a la base de datos con sqlite3
 const db = new sqlite3.Database(databasePath);
-
+function dbRunAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) reject(err);
+      else resolve(this);
+    });
+  });
+}
 db.serialize(() => {
   db.run('PRAGMA foreign_keys = ON');
 
@@ -191,6 +198,7 @@ app.get('/api/turnos', async (req, res) => {
     FROM turnos
     LEFT JOIN servicios ON servicios.id = turnos.servicio_id
     LEFT JOIN barberos ON barberos.id = turnos.barbero_id
+    WHERE turnos.estado != 'cancelado'
     ORDER BY turnos.fecha ASC, turnos.hora ASC
   `;
   const params = hasFecha ? [req.query.fecha] : [];
@@ -327,7 +335,7 @@ app.delete('/api/turnos/:id/cliente', async (req, res) => {
     if (hoursUntilBooking(booking) < 4) return res.status(400).json({ error: 'Podés cancelar el turno hasta 4 horas antes.' });
     const update = await dbRunAsync("UPDATE turnos SET estado = 'cancelado' WHERE id = ? AND estado != 'cancelado'", [booking.id]);
     if (!update.changes) return res.status(404).json({ error: 'El turno ya fue cancelado.' });
-    recordBookingEvent('turno_cancelado', booking);
+    recordBookingEvent('turno_eliminado', booking);
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -426,8 +434,9 @@ app.delete('/api/servicios/:id', requireAdmin, (req, res) => {
 app.delete('/api/turnos/:id', requireAdmin, async (req, res) => {
   try {
     const booking = await dbGetAsync('SELECT * FROM turnos WHERE id = ?', [req.params.id]);
-    if (!booking || booking.estado === 'cancelado') return res.status(404).json({ error: 'Turno no encontrado.' });
-    await dbRunAsync("UPDATE turnos SET estado = 'cancelado' WHERE id = ?", [req.params.id]);
+    if (!booking) return res.status(404).json({ error: 'Turno no encontrado.' });
+    const deletion = await dbRunAsync('DELETE FROM turnos WHERE id = ?', [req.params.id]);
+    if (!deletion.changes) return res.status(404).json({ error: 'Turno no encontrado.' });
     recordBookingEvent('turno_cancelado', booking);
     res.json({ ok: true });
   } catch (error) {
